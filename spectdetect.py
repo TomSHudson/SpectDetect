@@ -1148,75 +1148,94 @@ def STA_LTA_detect_event_arrivals_from_spectrogram_station_detection_fract(st, s
    
             outfile.close()
     
+def run(jul_day, hour, datadir, outdir, stations_to_use, fract_stations_filter, freq_range=[45,200], min_snr=2.5, centre_freq_range=[4.0,200.0], centre_freq_range_step=0.5, band_width_gau_filter=[1.25], plotSwitch=False, dispersionFilterSwitch=True):
+    """Function to run spectrum based detection algorithm. Provides optional filtering for dispersive arrivals (rejecting arrivals exhibiting dispersive energy).
+    Inputs are:
+    Compulsary arguments:
+    jul_day - julian day to search over
+    hour - hour to search over
+    datadir - Parent directory containing mseed data (e.g. ./VITAL_DATA/MSEED/500sps/2014)
+    outdir - Directory to save outputs to
+    stations_to_use - List of stations to use (e.g. ["SKR01","SKR02","SKR03","SKR04","SKR05"])
+    fract_stations_filter - Minimum number of stations that have to detect an arrival before triggering an event detection
+    Optional arguments:
+    freq_range - Range of frequencies over which to calculate the average energy used as the detection parameter (e.g. [45,200])
+    min_snr - The minimum signal to noise ratio of the energy arriving within freq. band freq_range for triggering a detection
+    centre_freq_range - Range of centre frequencies over which to do FTAN dispersion filtering (Hz) (e.g. [4.0,200.0])
+    centre_freq_range_step - Size of centre frequency step used in dispersion filter (Hz) (e.g. 0.5)
+    band_width_gau_filter - Band width of the gaussian filter applied during the dispersion filtering (Hz) (e.g. [1.25])
+    plotSwitch - Boolian defining whether or not to produce key plots to check processing steps
+    dispersionFilterSwitch - Boolian defining whether to implement disperison filtering or not
+    Outputs are:
+    Detected events written to files and output to outdir
+    """
+    
+    # Run script:
+    st = get_single_mseed_file_for_hour(jul_day,hour,datadir)
 
+    # Check that stations are definitely in stream, and if not, remove:
+    print "---------------Checking that instruments are definitely in stream and list---------------"
+    statName_list = stations_to_use
+    statName_list_filtered_by_availability = []
+    for j in range(len(st)):
+        if str(st[j].stats.station) in statName_list:
+            if str(st[j].stats.station) not in statName_list_filtered_by_availability:
+                statName_list_filtered_by_availability.append(str(st[j].stats.station))
+    statName_list = sorted(statName_list_filtered_by_availability)
+    print "---------------Finished checking that instruments are definitely in stream and list---------------"
+
+
+    # Perform search for icequakes from spectrogram:
+    # Detect icequakes:
+    print "---------------Performing initial spectrogram search for icequakes---------------"
+    ###freq_range = [45,120] #[50,120] # Rnage over which to take average amplitude (or max amplitude?, see function)
+    ###min_snr = 2.5 # For obtaining peaks in frequency
+    detection_all_stations_bins = icequake_search_using_spectrogram(st, statName_list, freq_range, min_snr) # Returns proportion of station detections for each second in hour of data
+
+    # And allow for overlap of events over multiple seconds:
+    detection_all_stations_bins = adjust_for_event_second_overlap(detection_all_stations_bins) # Returns proportion of stations detections in each second, with any detections within the following second moved to the previous second
+
+    print "---------------Finished initial spectrogram search for icequakes---------------"
+
+    try:
+        print "Number of events found within the hour of data:", len(np.where(detection_all_stations_bins >= fract_stations_filter)[0])
+    except:
+        print "   "
+        
+    # Filter out dispersion events (surface waves from crevassing) (FTAN method):
+    if dispersionFilterSwitch:
+        print "---------------Performing surface wave filtering (via FTAN dispersion measurement) for icequakes---------------"
+        # Define specific parameters used:
+        ###centre_freq_range = [4.0,200.0] # Range of centre frequencies, in Hz
+        ###centre_freq_range_step = 0.5 #1.0 # Step of centre frequency in loop iteration, in Hz
+        ###band_width_gau_filter = [1.25] #[2.5] #[5.0] # Band width of gaussian filter in Hz, either as one value in array or array of values corresponding to every central frequency
+        sampling_rate = st[0].stats.sampling_rate # Sampling rate of signal in Hz
+        ###plotSwitch = False # For specifying whehter to plot processing steps
+        # Get updated array using FTAN dispersion filter:
+        detection_all_stations_bins = FTAN_filter_for_dispersion(centre_freq_range, centre_freq_range_step, band_width_gau_filter, sampling_rate, statName_list, fract_stations_filter, plotSwitch)
+        print "---------------Finished surface wave filtering for icequakes---------------"
+
+        try:
+            print "Number of events found within the hour of data, after filtering:", len(np.where(detection_all_stations_bins >= fract_stations_filter)[0])
+        except:
+            print "   "
+            
+    # Write events to file that have sufficient fraction of stations contributing to detection:
+    print "---------------Writing event detection times to file---------------"
+    # Write CMM event line data to file:
+    produce_CMM_event_output_files(st, detection_all_stations_bins, fract_stations_filter, outdir)
+    # And create cut mseed data:
+    cut_mseed_for_events(st, detection_all_stations_bins, fract_stations_filter, outdir)
+    print "---------------Finished writing event detection times to file---------------"
+    # Detect events that have sufficient fraction of stations contributing to detection, and get more precise arrival times:
+    print "---------------Performing STA LTA detection of event arrivals for filterered icequakes, and writing to file---------------"
+    # Write nonlinloc obs file data to file:
+    ###STA_LTA_detect_event_arrivals_from_spectrogram_station_detection_fract(st, statName_list, detection_all_stations_bins, fract_stations_filter, outdir)
+    print "---------------Finished STA LTA detection of event arrivals for filterered icequakes, and writing to file---------------"
+    
+    
 #======================================================================================================
 
 # Run functions in script:
+run(jul_day, hour, datadir, outdir, stations_to_use, fract_stations_filter, freq_range=[45,200], min_snr=2.5, centre_freq_range=[4.0,200.0], centre_freq_range_step=0.5, band_width_gau_filter=[1.25], plotSwitch=False, dispersionFilterSwitch=True)
 
-# Get input variables:
-jul_day = str(sys.argv[1])
-hour = str(sys.argv[2])
-fract_stations_filter = int(sys.argv[3]) #4 #5
-datadir = str(sys.argv[4]) # = "/raid1/tsh37/hyades_backup/tsh37/VITAL_DATA/MSEED/500sps/2014"
-outdir = str(sys.argv[5]) #"./output_files" # Directory for storing nonlinloc output files
-stations_array_to_plot_filename = str(sys.argv[6])
-stations_array_to_plot = np.loadtxt(stations_array_to_plot_filename,dtype=str) # = ["SKR01","SKR02","SKR03","SKR04","SKR05","SKR06","SKR07","SKG08","SKG09","SKG10","SKG11","SKG12","SKG13"]
-
-# Run script:
-st = get_single_mseed_file_for_hour(jul_day,hour,datadir)
-
-# Check that stations are definitely in stream, and if not, remove:
-print "---------------Checking that instruments are definitely in stream and list---------------"
-statName_list = stations_array_to_plot
-statName_list_filtered_by_availability = []
-for j in range(len(st)):
-    if str(st[j].stats.station) in statName_list:
-        if str(st[j].stats.station) not in statName_list_filtered_by_availability:
-            statName_list_filtered_by_availability.append(str(st[j].stats.station))
-statName_list = sorted(statName_list_filtered_by_availability)
-print "---------------Finished checking that instruments are definitely in stream and list---------------"
-
-
-# Perform search for icequakes from spectrogram:
-# Detect icequakes:
-print "---------------Performing initial spectrogram search for icequakes---------------"
-freq_range = [45,120] #[50,120] # Rnage over which to take average amplitude (or max amplitude?, see function)
-min_snr = 2.5 # For obtaining peaks in frequency
-detection_all_stations_bins = icequake_search_using_spectrogram(st, statName_list, freq_range, min_snr) # Returns proportion of station detections for each second in hour of data
-
-# And allow for overlap of events over multiple seconds:
-detection_all_stations_bins = adjust_for_event_second_overlap(detection_all_stations_bins) # Returns proportion of stations detections in each second, with any detections within the following second moved to the previous second
-
-print "---------------Finished initial spectrogram search for icequakes---------------"
-
-try:
-    print "Number of events found within the hour of data:", len(np.where(detection_all_stations_bins >= fract_stations_filter)[0])
-except:
-    print "   "
-        
-# Filter out dispersion events (surface waves from crevassing) (FTAN method):
-print "---------------Performing surface wave filtering (via FTAN dispersion measurement) for icequakes---------------"
-# Define specific parameters used:
-centre_freq_range = [4.0,200.0] # Range of centre frequencies, in Hz
-centre_freq_range_step = 0.5 #1.0 # Step of centre frequency in loop iteration, in Hz
-band_width_gau_filter = [1.25] #[2.5] #[5.0] # Band width of gaussian filter in Hz, either as one value in array or array of values corresponding to every central frequency
-sampling_rate = 500.0 # Sampling rate of signal in, in Hz
-plotSwitch = False # For specifying whehter to plot processing steps
-# Get updated array using FTAN dispersion filter:
-detection_all_stations_bins = FTAN_filter_for_dispersion(centre_freq_range, centre_freq_range_step, band_width_gau_filter, sampling_rate, statName_list, fract_stations_filter, plotSwitch)
-print "---------------Finished surface wave filtering for icequakes---------------"
-
-try:
-    print "Number of events found within the hour of data, after filtering:", len(np.where(detection_all_stations_bins >= fract_stations_filter)[0])
-except:
-    print "   "
-
-# Detect events that have sufficient fraction of stations contributing to detection, and get more precise arrival times:
-print "---------------Performing STA LTA detection of event arrivals for filterered icequakes, and writing to file---------------"
-# Write CMM event line data to file:
-produce_CMM_event_output_files(st, detection_all_stations_bins, fract_stations_filter, outdir)
-# And create cut mseed data:
-cut_mseed_for_events(st, detection_all_stations_bins, fract_stations_filter, outdir)
-# Write nonlinloc obs file data to file:
-###STA_LTA_detect_event_arrivals_from_spectrogram_station_detection_fract(st, statName_list, detection_all_stations_bins, fract_stations_filter, outdir)
-print "---------------Finished STA LTA detection of event arrivals for filterered icequakes, and writing to file---------------"
