@@ -3,10 +3,27 @@
 #-----------------------------------------------------------------------------------------------------------------------------------------
 
 # Script Description:
-# Script to produce spectogram of an event, for each component, with time through the event.
+# Module to detect earthquakes based on the energy arriving within a certain frequency band at multiple stations.
+# Also allows for filtering events based on whether they exhibit dispersive arrivals (if dispersive, will not trigger a detection).
 
 
 # Input variables:
+    # Compulsary arguments:
+    # jul_day - julian day to search over
+    # hour - hour to search over
+    # datadir - Parent directory containing mseed data (e.g. ./VITAL_DATA/MSEED/500sps/2014)
+    # outdir - Directory to save outputs to
+    # stations_to_use - List of stations to use (e.g. ["SKR01","SKR02","SKR03","SKR04","SKR05"])
+    # fract_stations_filter - Minimum number of stations that have to detect an arrival before triggering an event detection
+    # Optional arguments:
+    # freq_range - Range of frequencies over which to calculate the average energy used as the detection parameter (e.g. [45,200])
+    # min_snr - The minimum signal to noise ratio of the energy arriving within freq. band freq_range for triggering a detection
+    # centre_freq_range - Range of centre frequencies over which to do FTAN dispersion filtering (Hz) (e.g. [4.0,200.0])
+    # centre_freq_range_step - Size of centre frequency step used in dispersion filter (Hz) (e.g. 0.5)
+    # band_width_gau_filter - Band width of the gaussian filter applied during the dispersion filtering (Hz) (e.g. [1.25])
+    # plotSwitch - Boolian defining whether or not to produce key plots to check processing steps
+    # dispersionFilterSwitch - Boolian defining whether to implement disperison filtering or not
+    # returnCutMSEEDSwitch - Boolian defining whether or not to return cut mseed data for each event
 
 # Output variables:
 
@@ -51,41 +68,11 @@ instGainFilename = "instrument_gain_data.txt" # File containing instrument gain 
 
 # -------------------------------Define Main Functions In Script-------------------------------
 
-def get_single_mseed_file_for_hour(jul_day,hour,datadir):
-    '''Function to get single mseed stream for hour of data.'''
-    
-    #datadir = "/raid1/tsh37/hyades_backup/tsh37/VITAL_DATA/MSEED/500sps/2014"
-    
-    # Get empty stream to append to
-    stTemp = obspy.read()
-    stTemp.clear()
-    
-    for file in glob.glob(datadir+"/"+str(jul_day)+"/2014"+str(jul_day)+"_"+str(hour)+"*.m"):
-        print "Getting data from file: ", file                     
-        st_tmp = obspy.read(file)
-        stTemp.append(st_tmp[0])
-    
-    print 'detrending stream'
-    st = stTemp.copy()
+def get_single_mseed_file_data(mseed_fname):
+    '''Function to get mseed data given a mseed file or a set of files defined by wildcards.
+    Returns st - stream containing detrended mseed data.''' 
+    st = obspy.read(mseed_fname)
     st.detrend(type='demean') # The mean of the data is subtracted from the stream
-    
-    # filename_tmp = "tmp_hour_mseed.m"
-    # st.write("tmp_hour_mseed.m", format="MSEED")
-    
-    return st
-    
-
-def importData(filename):
-    '''Function to import data from cut mseed file as stream using obspy'''
-    
-    stTemp = read(filename) # Import stream from .mseed file
-    print 'length of stream: ', len(stTemp)
-    
-    # Detrend stream (to remove artifacts when filtering):
-    print 'detrending stream'
-    st = stTemp.copy()
-    st.detrend(type='demean') # The mean of the data is subtracted from the stream
-    
     return st
 
 
@@ -233,14 +220,10 @@ def whitened_spectrogram(st, statName, matplotlib_vs_obspy_plotting_switch):
 def icequake_search_using_spectrogram(st, statName_list, freq_range, min_snr):
     """Function to search for icequakes using spectrogram. Won't pick up all events but will pick up a number for cross-correlation. Input is a stream, and a list of station names that are in the stream to be processed.
     Returns detection_all_stations_bins, an array of length number of seconds of data input (3600). This array contains th fraction of total stations that detected an event in the spectrogram for a given second. This can then be used to search for an exact event origin time."""
-    
-    print "Searching for icequakes within the spectrograms"
-    
+        
     # Create arrays for storing data:
-    num_seconds_of_data = 3600
-    #freq_range = [50,120] #[50,120]
+    num_seconds_of_data = int(len(st[0].data)/st[0].stats.sampling_rate) #3600
     detection_all_stations_bins = np.zeros(num_seconds_of_data,dtype=float) # array to store detections at stations. A value of 1 is appended to a specific bin if an event is detected there, above the snr threshold specified below
-    #min_snr=2.5 #2.3
     
     # Loop over all stations, getting spectrum and appending to total spectrum array:
     for i in range(len(statName_list)):
@@ -321,325 +304,6 @@ def adjust_for_event_second_overlap(detection_all_stations_bins):
             
     return detection_all_stations_bins
 
-
-def spectrogram_filter_for_dispersion_plotting(st, statName_list, detection_all_stations_bins, fract_stations_filter, plottingSwitch, stationPlotToSave):
-    """Function to filter detections to discriminate between surface events and basal events, using dispersion measurement. Inputs are stream containing waveform data, station list and detection bin array containing initial detections to filter for."""
-    """Note: Plots only at the moment."""
-    
-    # Note:
-    # Processes for vertical and horizontal components (using Z, N+E here)
-    
-    # Specify spectrum picking parameters for detailed spectrum first peak pick (may be different to in function icequake_search_using_spectrogram() ):
-    freq_range_P = [50,120] #[50,120]
-    freq_range_S = [25,75]
-    min_snr=2.25 #2.0 #2.5 #2.3
-    
-    st_to_process=st.copy()
-    
-    # Get start time of trace:
-    startTime = st[0].stats.starttime
-    
-    # Process spectogram data, for N component:
-    # Loop through stations:
-    for i in range(len(statName_list)):
-        statName = statName_list[i]
-        print "CHecking for dispersion for station: ", statName
-        # Get spectrum data for station (if station exists):
-        data_processing_switch = False
-        try:
-            tr_Z_spec_stat = st_to_process.select(station=statName).select(component="Z")[0]
-            tr_N_spec_stat = st_to_process.select(station=statName).select(component="N")[0]
-            tr_E_spec_stat = st_to_process.select(station=statName).select(component="E")[0]
-            data_processing_switch = True
-        except:
-            print "cannot get data for station: "+statName+" therefore continuing."
-        if data_processing_switch:
-            
-            # --------------------------- Process data for Z component (for P arrival) ---------------------------
-            freq_range = freq_range_P
-            
-            # Whiten data (for entire hour):
-            # Get amplitude spectral density (ASD) (unwhitened) (normalised to 1):
-            # Process data:
-            data = tr_Z_spec_stat # tr_Z_spec_stat.data+tr_N_spec_stat.data+tr_E_spec_stat.data
-            fs = tr_Z_spec_stat.stats.sampling_rate
-            NFFT = int(fs)*1 # Number of values used in each block (very low for looking at a few seconds of data)
-            Pxx , freqs = mlab.psd(data, Fs=fs, NFFT=NFFT) #calculate the amplitude spectral density
-
-            # Perform spectral whitening:
-            psd = scipy.interpolate.interp1d(freqs, Pxx) # interpolates the ASD (unwhitened)
-            freqs = np.fft.rfftfreq(len(data), 1/fs) # get the discrete fourier transform sample frequencies
-            f_data = np.fft.rfft(data) #transform data to freqency domain
-            white_f_data = f_data / (np.sqrt(psd(freqs) * fs /2.)) #divide by ASD (in frequency domain)
-            white_data = np.fft.irfft(white_f_data, n=len(data)) #transform back into time domain with inverse fft
-            
-
-            # Loop over detections array, doing detailed spectrogram around event if enough stations record it:
-            for a in range(len(detection_all_stations_bins)):
-                # Only process if detected on sufficient number of stations:
-                if detection_all_stations_bins[a]>=fract_stations_filter:
-                    # Only process if have enough seconds before and after event:
-                    if a>=1 and a<3599:
-                        print "Checking for dispersion, for event at time:", startTime+a
-                        # Trim data for specific current event:
-                        start_index = int(fs*(a-1))
-                        end_index = int(fs*(a+1))
-                        white_data_spec_event_trimmed = white_data[start_index:end_index]
-                        #st_tmp_trimmed = st_to_process.trim(starttime=startTime+a-1.0, endtime=startTime+a+2.0)
-                        
-                        # Get spectrogram data (would be better to use plt.specgram, as in tutorial, but doesnt work on uranus!):
-                        # ORIGINAL: Pxx, freqs, t = mlab.specgram(white_data, NFFT=10, Fs=fs,noverlap=5) # Variables not used, that are in pyplot specgram fctn: mode='psd', scale='dB', cmap=spec_cmap, xextent=[0,3600], vmin=-30, vmax=-5
-                        NFFT = int(fs)*1/25 #*1/20 #1/25 # Number of values used in each block (very low for looking at a few seconds of data)
-                        per_lap=0.9 # Percentage overlap value
-                        nlap = int(NFFT * float(per_lap))
-                        spec, freqs, time = mlab.specgram(white_data_spec_event_trimmed, Fs=fs, NFFT=NFFT, noverlap=nlap)
-                        bins = time # bins equals t - t is array of mid point values of time in spectrogram
-                        #TO SEE SPECTROGRAM ONLY: obspy_spectrogram.spectrogram(white_data,500,wlen=0.01)
-            
-                        # Find first peak in detailed 3s spectrum:
-                        #freq_range = [50,120] # Frequency range to search over
-                        freq_min_idx = np.argmin(abs(freqs - freq_range[0]))  #get the frequency indices closest to our frequency choice
-                        freq_max_idx = np.argmin(abs(freqs - freq_range[1]))
-                        freq_av_power = np.zeros(len(bins))
-                        freq_max_power = np.zeros(len(bins))
-                        for bin_idx in range(len(bins)): #loop over all bins of the spectrogram (the x-axis)
-                            freq_av_power[bin_idx] = np.average(spec[freq_min_idx : freq_max_idx, bin_idx]) #calculate the mean power within the freqency range
-                        # And get maximum from freq_av_power array, and find onset of this:
-                        max_peak_index = np.argmax(freq_av_power)
-                        approx_half_width_peak_in_fract_of_second = 0.05 #0.025 #0.1
-                        onset_index = (max_peak_index - int(approx_half_width_peak_in_fract_of_second*float(len(freq_av_power))/2.0)) + np.argmin(freq_av_power[max_peak_index-int(approx_half_width_peak_in_fract_of_second*float(len(freq_av_power))/2.0) : max_peak_index]) # Find minimum before peak
-                        # #++
-                        # # And find first peak within +/-0.3 seconds of greatest amplitude peak
-                        # peak_idx = scipy.signal.find_peaks_cwt(freq_av_power, np.array([1]), min_snr=min_snr) #find peaks within a window of size 1 with SNR>2.3 # (widths=[1] doesn't work due to scipy version on uranus!, so pass it a numpy array)
-                        # print 'found onset at index: ', peak_idx
-                        # #++
-                        
-                        if plottingSwitch:
-                            # Plot spectrum with pick of first part of spectrum:
-                            print np.shape(spec)
-                            print np.shape(freqs)
-                            fig, (ax0, ax1) = plt.subplots(2, sharex=True, figsize=(8,6))
-                            # Plot waveform:
-                            tr_Z_spec_stat_filt = tr_Z_spec_stat.copy()
-                            tr_Z_spec_stat_filt.filter('bandpass', freqmin=freq_range[0], freqmax=freq_range[1], corners=4, zerophase=True)
-                            y_tmp = tr_Z_spec_stat_filt.data[start_index:end_index] # Cut out only waveform data for 2 seconds
-                            x_tmp = np.linspace(-1000,1000,num=len(y_tmp))
-                            ax0.plot(x_tmp,y_tmp, color='k')
-                            ax0.set_ylabel("Amplitude, N_comp, filtered (counts)")
-                            # And plot spectrogram:
-                            #ax1.imshow(spec[:,int(len(time)/3):int(2*len(time)/3)], cmap="hot", origin='lower', extent=(0, 1000, freqs[0], freqs[-1]))
-                            ax1.imshow(spec[:,:], cmap="hot", origin='lower', extent=(-1000, 1000, freqs[0], freqs[-1]), aspect="auto")
-                            ax1.set_xlabel("Time after "+str(startTime+a)+" (ms)")
-                            ax1.set_ylabel("Frequency (Hz)")
-                            # Plot frequency band, for data used for detection:
-                            ax1.axhline(y=freq_range[0],color='cyan', linestyle="dashed")
-                            ax1.axhline(y=freq_range[1],color='cyan', linestyle="dashed")
-                            # And plot data used for detection:
-                            ax2 = ax1.twinx() # Set up second y scale
-                            y_tmp = freq_av_power[:] # Get 1 second of average frequency power data
-                            x_tmp = np.linspace(-1000,1000,num=len(y_tmp)) # Get x values to correspond with ms scale of spectrogram plot
-                            print "len(x_tmp)", len(x_tmp)
-                            print "len(y_tmp)", len(y_tmp)
-                            ax2.plot(x_tmp, y_tmp, color='g')
-                            ax2.set_ylabel("Average frequency power (arb. units)")
-                            # Plot pick location:
-                            first_peak_av_freq_index = onset_index # First pick index
-                            first_peak_av_freq_index_in_ms_after_event_pick_time = int(((float(first_peak_av_freq_index) - (float(len(time))/2))/(float(len(time))/2))*1000.0) # First pick index, in terms of ms after start time
-                            print first_peak_av_freq_index_in_ms_after_event_pick_time
-                            ax2.axvline(x=first_peak_av_freq_index_in_ms_after_event_pick_time,color='b')
-                            ax0.axvline(x=first_peak_av_freq_index_in_ms_after_event_pick_time,color='b')
-                            # plt.plot(spec[:,400], freqs)
-                            fig.suptitle("P arrival")
-                            plt.show()
-                            
-                        # Plot spectrum with pick of first part of spectrum, for specified station, if exists:
-                        if statName == stationPlotToSave:
-                            # Plot spectrum with pick of first part of spectrum:
-                            print np.shape(spec)
-                            print np.shape(freqs)
-                            fig, (ax0, ax1) = plt.subplots(2, sharex=True, figsize=(8,6))
-                            # Plot waveform:
-                            tr_Z_spec_stat_filt = tr_Z_spec_stat.copy()
-                            tr_Z_spec_stat_filt.filter('bandpass', freqmin=freq_range[0], freqmax=freq_range[1], corners=4, zerophase=True)
-                            y_tmp = tr_Z_spec_stat_filt.data[start_index:end_index] # Cut out only waveform data for 2 seconds
-                            x_tmp = np.linspace(-1000,1000,num=len(y_tmp))
-                            ax0.plot(x_tmp,y_tmp, color='k')
-                            ax0.set_ylabel("Amplitude, N_comp, filtered (counts)")
-                            # And plot spectrogram:
-                            #ax1.imshow(spec[:,int(len(time)/3):int(2*len(time)/3)], cmap="hot", origin='lower', extent=(0, 1000, freqs[0], freqs[-1]))
-                            ax1.imshow(spec[:,:], cmap="hot", origin='lower', extent=(-1000, 1000, freqs[0], freqs[-1]), aspect="auto")
-                            ax1.set_xlabel("Time after "+str(startTime+a)+" (ms)")
-                            ax1.set_ylabel("Frequency (Hz)")
-                            # Plot frequency band, for data used for detection:
-                            ax1.axhline(y=freq_range[0],color='cyan', linestyle="dashed")
-                            ax1.axhline(y=freq_range[1],color='cyan', linestyle="dashed")
-                            # And plot data used for detection:
-                            ax2 = ax1.twinx() # Set up second y scale
-                            y_tmp = freq_av_power[:] # Get 1 second of average frequency power data
-                            x_tmp = np.linspace(-1000,1000,num=len(y_tmp)) # Get x values to correspond with ms scale of spectrogram plot
-                            print "len(x_tmp)", len(x_tmp)
-                            print "len(y_tmp)", len(y_tmp)
-                            ax2.plot(x_tmp, y_tmp, color='g')
-                            ax2.set_ylabel("Average frequency power (arb. units)")
-                            # Plot pick location:
-                            first_peak_av_freq_index = onset_index # First pick index
-                            first_peak_av_freq_index_in_ms_after_event_pick_time = int(((float(first_peak_av_freq_index) - (float(len(time))/2))/(float(len(time))/2))*1000.0) # First pick index, in terms of ms after start time
-                            print first_peak_av_freq_index_in_ms_after_event_pick_time
-                            ax2.axvline(x=first_peak_av_freq_index_in_ms_after_event_pick_time,color='b')
-                            ax0.axvline(x=first_peak_av_freq_index_in_ms_after_event_pick_time,color='b')
-                            # plt.plot(spec[:,400], freqs)
-                            fig.suptitle("P arrival")
-                            time_tmp_for_saving = startTime+a
-                            filename_to_save = time_tmp_for_saving.strftime("%Y%m%d%H%M%S")+"_"+stationPlotToSave+"_P.png"
-                            print "Saving figure to:", "output_plots"+"/"+filename_to_save
-                            plt.savefig("output_plots"+"/"+filename_to_save, dpi=100)
-            
-            # --------------------------- Process data for N and E components (for S arrival) ---------------------------
-            freq_range = freq_range_S
-            
-            # Whiten data (for entire hour):
-            # Get amplitude spectral density (ASD) (unwhitened) (normalised to 1):
-            # Process data:
-            data = tr_N_spec_stat.data+tr_E_spec_stat.data # tr_Z_spec_stat.data+tr_N_spec_stat.data+tr_E_spec_stat.data
-            fs = tr_N_spec_stat.stats.sampling_rate
-            NFFT = int(fs)*1 # Number of values used in each block (very low for looking at a few seconds of data)
-            Pxx , freqs = mlab.psd(data, Fs=fs, NFFT=NFFT) #calculate the amplitude spectral density
-
-            # Perform spectral whitening:
-            psd = scipy.interpolate.interp1d(freqs, Pxx) # interpolates the ASD (unwhitened)
-            freqs = np.fft.rfftfreq(len(data), 1/fs) # get the discrete fourier transform sample frequencies
-            f_data = np.fft.rfft(data) #transform data to freqency domain
-            white_f_data = f_data / (np.sqrt(psd(freqs) * fs /2.)) #divide by ASD (in frequency domain)
-            white_data = np.fft.irfft(white_f_data, n=len(data)) #transform back into time domain with inverse fft
-            
-
-            # Loop over detections array, doing detailed spectrogram around event if enough stations record it:
-            for a in range(len(detection_all_stations_bins)):
-                # Only process if detected on sufficient number of stations:
-                if detection_all_stations_bins[a]>=fract_stations_filter:
-                    # Only process if have enough seconds before and after event:
-                    if a>=1 and a<3599:
-                        print "Checking for dispersion, for event at time:", startTime+a
-                        # Trim data for specific current event:
-                        start_index = int(fs*(a-1))
-                        end_index = int(fs*(a+1))
-                        white_data_spec_event_trimmed = white_data[start_index:end_index]
-                        #st_tmp_trimmed = st_to_process.trim(starttime=startTime+a-1.0, endtime=startTime+a+2.0)
-                        
-                        # Get spectrogram data (would be better to use plt.specgram, as in tutorial, but doesnt work on uranus!):
-                        # ORIGINAL: Pxx, freqs, t = mlab.specgram(white_data, NFFT=10, Fs=fs,noverlap=5) # Variables not used, that are in pyplot specgram fctn: mode='psd', scale='dB', cmap=spec_cmap, xextent=[0,3600], vmin=-30, vmax=-5
-                        NFFT = int(fs)*1/25 #*1/20 #1/25 # Number of values used in each block (very low for looking at a few seconds of data)
-                        per_lap=0.9 # Percentage overlap value
-                        nlap = int(NFFT * float(per_lap))
-                        spec, freqs, time = mlab.specgram(white_data_spec_event_trimmed, Fs=fs, NFFT=NFFT, noverlap=nlap)
-                        bins = time # bins equals t - t is array of mid point values of time in spectrogram
-                        #TO SEE SPECTROGRAM ONLY: obspy_spectrogram.spectrogram(white_data,500,wlen=0.01)
-            
-                        # Find first peak in detailed 3s spectrum:
-                        #freq_range = [50,120] # Frequency range to search over
-                        freq_min_idx = np.argmin(abs(freqs - freq_range[0]))  #get the frequency indices closest to our frequency choice
-                        freq_max_idx = np.argmin(abs(freqs - freq_range[1]))
-                        freq_av_power = np.zeros(len(bins))
-                        freq_max_power = np.zeros(len(bins))
-                        for bin_idx in range(len(bins)): #loop over all bins of the spectrogram (the x-axis)
-                            freq_av_power[bin_idx] = np.average(spec[freq_min_idx : freq_max_idx, bin_idx]) #calculate the mean power within the freqency range
-                        # And get maximum from freq_av_power array, and find onset of this:
-                        max_peak_index = np.argmax(freq_av_power)
-                        approx_half_width_peak_in_fract_of_second = 0.05 #0.025 #0.1
-                        # Find minimum before peak (if exists)
-                        try:
-                            onset_index = (max_peak_index - int(approx_half_width_peak_in_fract_of_second*float(len(freq_av_power))/2.0)) + np.argmin(freq_av_power[max_peak_index-int(approx_half_width_peak_in_fract_of_second*float(len(freq_av_power))/2.0) : max_peak_index]) # Find minimum before peak
-                        except:
-                            onset_index = 0 # If minimum doesnt exist/fails to find
-                        # #++
-                        # peak_idx = scipy.signal.find_peaks_cwt(freq_av_power, np.array([1]), min_snr=min_snr) #find peaks within a window of size 1 with SNR>2.3 # (widths=[1] doesn't work due to scipy version on uranus!, so pass it a numpy array)
-                        # print 'found onset at index: ', peak_idx
-                        # #++
-                        
-                        if plottingSwitch:
-                            # Plot spectrum with pick of first part of spectrum:
-                            print np.shape(spec)
-                            print np.shape(freqs)
-                            fig, (ax0, ax1) = plt.subplots(2, sharex=True, figsize=(8,6))
-                            # Plot waveform:
-                            tr_N_spec_stat_filt = tr_N_spec_stat.copy()
-                            tr_N_spec_stat_filt.filter('bandpass', freqmin=freq_range[0], freqmax=freq_range[1], corners=4, zerophase=True)
-                            tr_E_spec_stat_filt = tr_E_spec_stat.copy()
-                            tr_E_spec_stat_filt.filter('bandpass', freqmin=freq_range[0], freqmax=freq_range[1], corners=4, zerophase=True)
-                            y_tmp = tr_N_spec_stat_filt.data[start_index:end_index] + tr_E_spec_stat_filt.data[start_index:end_index] # Cut out only waveform data for 2 seconds
-                            x_tmp = np.linspace(-1000,1000,num=len(y_tmp))
-                            ax0.plot(x_tmp,y_tmp, color='k')
-                            ax0.set_ylabel("Amplitude, N_comp, filtered (counts)")
-                            # And plot spectrogram:
-                            #ax1.imshow(spec[:,int(len(time)/3):int(2*len(time)/3)], cmap="hot", origin='lower', extent=(0, 1000, freqs[0], freqs[-1]))
-                            ax1.imshow(spec[:,:], cmap="hot", origin='lower', extent=(-1000, 1000, freqs[0], freqs[-1]), aspect="auto")
-                            ax1.set_xlabel("Time after "+str(startTime+a)+" (ms)")
-                            ax1.set_ylabel("Frequency (Hz)")
-                            # Plot frequency band, for data used for detection:
-                            ax1.axhline(y=freq_range[0],color='cyan', linestyle="dashed")
-                            ax1.axhline(y=freq_range[1],color='cyan', linestyle="dashed")
-                            # And plot data used for detection:
-                            ax2 = ax1.twinx() # Set up second y scale
-                            y_tmp = freq_av_power[:] # Get 1 second of average frequency power data
-                            x_tmp = np.linspace(-1000,1000,num=len(y_tmp)) # Get x values to correspond with ms scale of spectrogram plot
-                            print "len(x_tmp)", len(x_tmp)
-                            print "len(y_tmp)", len(y_tmp)
-                            ax2.plot(x_tmp, y_tmp, color='g')
-                            ax2.set_ylabel("Average frequency power (arb. units)")
-                            # Plot pick location:
-                            first_peak_av_freq_index = onset_index # First pick index
-                            first_peak_av_freq_index_in_ms_after_event_pick_time = int(((float(first_peak_av_freq_index) - (float(len(time))/2))/(float(len(time))/2))*1000.0) # First pick index, in terms of ms after start time
-                            print first_peak_av_freq_index_in_ms_after_event_pick_time
-                            ax2.axvline(x=first_peak_av_freq_index_in_ms_after_event_pick_time,color='b')
-                            ax0.axvline(x=first_peak_av_freq_index_in_ms_after_event_pick_time,color='b')
-                            # plt.plot(spec[:,400], freqs)
-                            fig.suptitle("S arrival")
-                            plt.show()
-                        
-                        # Plot spectrum with pick of first part of spectrum, for specified station, if exists:
-                        if statName == stationPlotToSave:
-                            # Plot spectrum with pick of first part of spectrum:
-                            print np.shape(spec)
-                            print np.shape(freqs)
-                            fig, (ax0, ax1) = plt.subplots(2, sharex=True, figsize=(8,6))
-                            # Plot waveform:
-                            tr_N_spec_stat_filt = tr_N_spec_stat.copy()
-                            tr_N_spec_stat_filt.filter('bandpass', freqmin=freq_range[0], freqmax=freq_range[1], corners=4, zerophase=True)
-                            tr_E_spec_stat_filt = tr_E_spec_stat.copy()
-                            tr_E_spec_stat_filt.filter('bandpass', freqmin=freq_range[0], freqmax=freq_range[1], corners=4, zerophase=True)
-                            y_tmp = tr_N_spec_stat_filt.data[start_index:end_index] + tr_E_spec_stat_filt.data[start_index:end_index] # Cut out only waveform data for 2 seconds
-                            x_tmp = np.linspace(-1000,1000,num=len(y_tmp))
-                            ax0.plot(x_tmp,y_tmp, color='k')
-                            ax0.set_ylabel("Amplitude, N_comp, filtered (counts)")
-                            # And plot spectrogram:
-                            #ax1.imshow(spec[:,int(len(time)/3):int(2*len(time)/3)], cmap="hot", origin='lower', extent=(0, 1000, freqs[0], freqs[-1]))
-                            ax1.imshow(spec[:,:], cmap="hot", origin='lower', extent=(-1000, 1000, freqs[0], freqs[-1]), aspect="auto")
-                            ax1.set_xlabel("Time after "+str(startTime+a)+" (ms)")
-                            ax1.set_ylabel("Frequency (Hz)")
-                            # Plot frequency band, for data used for detection:
-                            ax1.axhline(y=freq_range[0],color='cyan', linestyle="dashed")
-                            ax1.axhline(y=freq_range[1],color='cyan', linestyle="dashed")
-                            # And plot data used for detection:
-                            ax2 = ax1.twinx() # Set up second y scale
-                            y_tmp = freq_av_power[:] # Get 1 second of average frequency power data
-                            x_tmp = np.linspace(-1000,1000,num=len(y_tmp)) # Get x values to correspond with ms scale of spectrogram plot
-                            print "len(x_tmp)", len(x_tmp)
-                            print "len(y_tmp)", len(y_tmp)
-                            ax2.plot(x_tmp, y_tmp, color='g')
-                            ax2.set_ylabel("Average frequency power (arb. units)")
-                            # Plot pick location:
-                            first_peak_av_freq_index = onset_index # First pick index
-                            first_peak_av_freq_index_in_ms_after_event_pick_time = int(((float(first_peak_av_freq_index) - (float(len(time))/2))/(float(len(time))/2))*1000.0) # First pick index, in terms of ms after start time
-                            print first_peak_av_freq_index_in_ms_after_event_pick_time
-                            ax2.axvline(x=first_peak_av_freq_index_in_ms_after_event_pick_time,color='b')
-                            ax0.axvline(x=first_peak_av_freq_index_in_ms_after_event_pick_time,color='b')
-                            # plt.plot(spec[:,400], freqs)
-                            fig.suptitle("S arrival")
-                            time_tmp_for_saving = startTime+a
-                            filename_to_save = time_tmp_for_saving.strftime("%Y%m%d%H%M%S")+"_"+stationPlotToSave+"_S.png"
-                            print "Saving figure to:", "output_plots"+"/"+filename_to_save
-                            plt.savefig("output_plots"+"/"+filename_to_save, dpi=100)
-    
 
 def icequake_search_using_spectrogram_with_freq_band_ratios_sub_second(st, statName_list, detection_all_stations_bins, fract_stations_filter):
     """Function to detect events based upon frequency band average amplitude ratios (e.g. average freq in 50-120 Hz / average freq in 25-50 Hz)"""
@@ -946,10 +610,7 @@ def FTAN_filter_for_dispersion(centre_freq_range, centre_freq_range_step, band_w
                     # print "TESTING ENDING"
                     
                     del tr_spec_station_tmp # Clear previous history of the temparory variable, for next loop iteration
-                    
-
-                    
-                    
+                     
     # And return updated detection array:
     return detection_all_stations_bins
     
@@ -1148,13 +809,11 @@ def STA_LTA_detect_event_arrivals_from_spectrogram_station_detection_fract(st, s
    
             outfile.close()
     
-def run(jul_day, hour, datadir, outdir, stations_to_use, fract_stations_filter, freq_range=[45,200], min_snr=2.5, centre_freq_range=[4.0,200.0], centre_freq_range_step=0.5, band_width_gau_filter=[1.25], plotSwitch=False, dispersionFilterSwitch=True):
+def run(mseed_fname, outdir, stations_to_use, fract_stations_filter, freq_range=[45,200], min_snr=2.5, centre_freq_range=[4.0,200.0], centre_freq_range_step=0.5, band_width_gau_filter=[1.25], plotSwitch=False, dispersionFilterSwitch=True, returnCutMSEEDSwitch=False):
     """Function to run spectrum based detection algorithm. Provides optional filtering for dispersive arrivals (rejecting arrivals exhibiting dispersive energy).
     Inputs are:
     Compulsary arguments:
-    jul_day - julian day to search over
-    hour - hour to search over
-    datadir - Parent directory containing mseed data (e.g. ./VITAL_DATA/MSEED/500sps/2014)
+    mseed_fname - Filename/s of set of mseed filenames to use. Must be single string (e.g. "20140629*SKR*.m"). Supports wildcards.
     outdir - Directory to save outputs to
     stations_to_use - List of stations to use (e.g. ["SKR01","SKR02","SKR03","SKR04","SKR05"])
     fract_stations_filter - Minimum number of stations that have to detect an arrival before triggering an event detection
@@ -1166,13 +825,17 @@ def run(jul_day, hour, datadir, outdir, stations_to_use, fract_stations_filter, 
     band_width_gau_filter - Band width of the gaussian filter applied during the dispersion filtering (Hz) (e.g. [1.25])
     plotSwitch - Boolian defining whether or not to produce key plots to check processing steps
     dispersionFilterSwitch - Boolian defining whether to implement disperison filtering or not
+    returnCutMSEEDSwitch - Boolian defining whether or not to return cut mseed data for each event
     Outputs are:
     Detected events written to files and output to outdir
+    Notes:
+    mseed must have components specified. (i.e. must have Z,N,E specified in trace stats)
+    Currently only does 1 second detection windows.
     """
     
-    # Run script:
-    st = get_single_mseed_file_for_hour(jul_day,hour,datadir)
-
+    # Get stream for current data:
+    st = get_single_mseed_file_data(mseed_fname)
+    
     # Check that stations are definitely in stream, and if not, remove:
     print "---------------Checking that instruments are definitely in stream and list---------------"
     statName_list = stations_to_use
@@ -1188,8 +851,6 @@ def run(jul_day, hour, datadir, outdir, stations_to_use, fract_stations_filter, 
     # Perform search for icequakes from spectrogram:
     # Detect icequakes:
     print "---------------Performing initial spectrogram search for icequakes---------------"
-    ###freq_range = [45,120] #[50,120] # Rnage over which to take average amplitude (or max amplitude?, see function)
-    ###min_snr = 2.5 # For obtaining peaks in frequency
     detection_all_stations_bins = icequake_search_using_spectrogram(st, statName_list, freq_range, min_snr) # Returns proportion of station detections for each second in hour of data
 
     # And allow for overlap of events over multiple seconds:
@@ -1205,12 +866,7 @@ def run(jul_day, hour, datadir, outdir, stations_to_use, fract_stations_filter, 
     # Filter out dispersion events (surface waves from crevassing) (FTAN method):
     if dispersionFilterSwitch:
         print "---------------Performing surface wave filtering (via FTAN dispersion measurement) for icequakes---------------"
-        # Define specific parameters used:
-        ###centre_freq_range = [4.0,200.0] # Range of centre frequencies, in Hz
-        ###centre_freq_range_step = 0.5 #1.0 # Step of centre frequency in loop iteration, in Hz
-        ###band_width_gau_filter = [1.25] #[2.5] #[5.0] # Band width of gaussian filter in Hz, either as one value in array or array of values corresponding to every central frequency
         sampling_rate = st[0].stats.sampling_rate # Sampling rate of signal in Hz
-        ###plotSwitch = False # For specifying whehter to plot processing steps
         # Get updated array using FTAN dispersion filter:
         detection_all_stations_bins = FTAN_filter_for_dispersion(centre_freq_range, centre_freq_range_step, band_width_gau_filter, sampling_rate, statName_list, fract_stations_filter, plotSwitch)
         print "---------------Finished surface wave filtering for icequakes---------------"
@@ -1225,13 +881,14 @@ def run(jul_day, hour, datadir, outdir, stations_to_use, fract_stations_filter, 
     # Write CMM event line data to file:
     produce_CMM_event_output_files(st, detection_all_stations_bins, fract_stations_filter, outdir)
     # And create cut mseed data:
-    cut_mseed_for_events(st, detection_all_stations_bins, fract_stations_filter, outdir)
+    if returnCutMSEEDSwitch:
+        cut_mseed_for_events(st, detection_all_stations_bins, fract_stations_filter, outdir)
     print "---------------Finished writing event detection times to file---------------"
     # Detect events that have sufficient fraction of stations contributing to detection, and get more precise arrival times:
-    print "---------------Performing STA LTA detection of event arrivals for filterered icequakes, and writing to file---------------"
+    ###print "---------------Performing STA LTA detection of event arrivals for filterered icequakes, and writing to file---------------"
     # Write nonlinloc obs file data to file:
     ###STA_LTA_detect_event_arrivals_from_spectrogram_station_detection_fract(st, statName_list, detection_all_stations_bins, fract_stations_filter, outdir)
-    print "---------------Finished STA LTA detection of event arrivals for filterered icequakes, and writing to file---------------"
+    ###print "---------------Finished STA LTA detection of event arrivals for filterered icequakes, and writing to file---------------"
     
     
 #======================================================================================================
