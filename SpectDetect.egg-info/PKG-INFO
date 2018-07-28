@@ -1,0 +1,13 @@
+Metadata-Version: 1.1
+Name: SpectDetect
+Version: 0.0.3
+Summary: Microseismic detection algorithm package based on using key features in the spectrum of a source to detect earthquakes over a given time period.
+Home-page: https://github.com/TomSHudson/SpectDetect
+Author: Tom Hudson
+Author-email: UNKNOWN
+License: MIT
+Description: UNKNOWN
+Platform: UNKNOWN
+Classifier: Programming Language :: Python :: 2.7
+Classifier: License :: OSI Approved :: MIT License
+Classifier: Operating System :: OS Independent

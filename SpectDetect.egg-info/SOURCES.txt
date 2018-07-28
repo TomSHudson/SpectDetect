@@ -1,0 +1,9 @@
+README.md
+setup.cfg
+setup.py
+SpectDetect/SpectDetect.py
+SpectDetect/__init__.py
+SpectDetect.egg-info/PKG-INFO
+SpectDetect.egg-info/SOURCES.txt
+SpectDetect.egg-info/dependency_links.txt
+SpectDetect.egg-info/top_level.txt
