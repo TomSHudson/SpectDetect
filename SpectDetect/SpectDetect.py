@@ -45,8 +45,6 @@ import obspy
 import sys, os
 from obspy.core import read
 from obspy.core.utcdatetime import UTCDateTime
-from obspy.core.util import gps2DistAzimuth # Function to calc distance between two coordinates (see help(gps2DistAzimuth) for more info)
-#from obspy.geodetics import gps2dist_azimuth as gps2DistAzimuth
 from scipy import fft
 import scipy
 import matplotlib.mlab as mlab
