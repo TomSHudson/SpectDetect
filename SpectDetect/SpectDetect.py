@@ -30,7 +30,6 @@
 # Created by Tom Hudson, 29th Nov 2016
 
 # NOTE:
-# Run in colorado env (source activate colorado)
 # Currently doesn't use instrument gains
 # mseed must have components specified. (i.e. must have Z,N,E specified in trace stats)
 # Currently only does 1 second detection windows.
@@ -52,14 +51,6 @@ from scipy.signal import hilbert # For FTAN analysis
 from scipy.optimize import curve_fit
 #import pandas # For rolling window in normallised cross-correlation
 import copy
-
-# # Define any constants:
-# matplotlib_vs_obspy_plotting_switch = 2 # 1 for matplotlib plotting, 2 for obspy plotting
-# #filename = '2014180_1800_total_mseed.m'
-# #statName='SKR01'
-# #CMM_events_list_input_for_rotation_filename = indir+'/'+'CMM_events_list_input_for_rotation.txt'
-#  #["SKR01","SKR02","SKR03","SKR04","SKR05","SKR06","SKR07"] # List of stations to plot
-# instGainFilename = "instrument_gain_data.txt" # File containing instrument gain data, in format: station, sensor gain (Z,N,E), digitaliser gain (Z,N,E)
 
 # -------------------------------Define Main Functions In Script-------------------------------
 
