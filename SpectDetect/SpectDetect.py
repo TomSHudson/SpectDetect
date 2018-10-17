@@ -29,6 +29,10 @@
 
 # Created by Tom Hudson, 29th Nov 2016
 
+# Acknowledgements:
+# We thank F. Walter and his group for the insightful workshop that was part of the POLENET/SERCE Glacial Seismology Training School (2017), and on which certain aspects of this code are based.
+# Please see the related paper titled: "Automated detection of basal icequakes and discrimination from surface crevassing" for further details on the theory of how this code works.
+
 # NOTE:
 # Currently doesn't use instrument gains
 # mseed must have components specified. (i.e. must have Z,N,E specified in trace stats)
